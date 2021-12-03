@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -30,8 +33,32 @@ var total_requests int64 = 0
 var job_start_time int64 = 0
 var quit bool = false
 
+func httpClient() *http.Client {
+	client := &http.Client{Timeout: 10 * time.Second}
+	return client
+}
 
-func job(url string) {
+func sendRequest(client *http.Client, url string, method string) []byte {
+    values := map[string]string{"foo": "baz"}
+	jsonData, err := json.Marshal(values)
+
+	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Error Occurred. %+v", err)
+	}
+
+	response, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("Error sending request to API endpoint. %+v", err)
+	}
+
+	// Close the connection to reuse it
+	response.Body.Close()
+	return nil
+}
+
+
+func job(url string, c *http.Client) {
 	//Do the job
 	fmt.Printf("Job started for %s\n", url)
 	for {
@@ -40,34 +67,49 @@ func job(url string) {
 			break
 		}
 			//Make the request
-			resp, err := http.Get(url)
-			if err != nil {
-				fmt.Printf(err.Error())
-				quit = true
-				break
-			}
+			sendRequest(c, url, http.MethodGet )
 			//Increment total requests
 			total_requests++
-			fmt.Printf(resp.Status)
-			//Close the response
-			resp.Body.Close()
 		}
 		
 }
 
-func initJob(url string) {
+func initJob(url string, workers string) {
+	c := httpClient()
 	//Reset quit flag
 	quit = false
-	//Get CPUs Available
-	CPUs := runtime.NumCPU()
-	//Set the number of goroutines to the number of CPUs
-		for i := 0; i < (CPUs - 1); i++ {
-			go job(url)
+	//Convert workers to int
+	workerInt, _ := strconv.Atoi(workers)
+	//Set the number of goroutines to the number of workers
+		for i := 0; i < workerInt; i++ {
+			go job(url, c)
 		}
 		//Set job is running
 		job_running = true
 		//Set job start time
 		job_start_time = time.Now().Unix()
+
+		go System()
+}
+
+// Print system resource usage every 2 seconds.
+func System() {
+	mem := &runtime.MemStats{}
+ 
+	for {
+		cpu := runtime.NumCPU()
+		log.Println("CPU:", cpu)
+ 
+		rot := runtime.NumGoroutine()
+		log.Println("Goroutine:", rot)
+ 
+		// Byte
+		runtime.ReadMemStats(mem)
+		log.Println("Memory:", mem.Alloc)
+ 
+		time.Sleep(2 * time.Second)
+		log.Println("-------")
+	}
 }
 
 func main() {
@@ -86,7 +128,7 @@ func main() {
 			return
 		}
 		//Start the job	
-		initJob(c.PostForm("url"))
+		initJob(c.PostForm("url"), c.PostForm("workers"))
 		//Return the job success
 		c.JSON(http.StatusOK, gin.H{
 			"message": "new job started",
