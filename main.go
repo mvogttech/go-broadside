@@ -28,29 +28,46 @@ type Worker struct {
 var job_running bool = false
 var total_requests int64 = 0
 var job_start_time int64 = 0
-var quit = make(chan bool)
+var quit bool = false
 
 
 func job(url string) {
 	//Do the job
 	fmt.Printf("Job started for %s\n", url)
 	for {
-		select {
-        case <- quit:
-            return
-        default:
+		if quit {
+			//Quit the job if quit flag is set to true
+			break
+		}
+			//Make the request
 			resp, err := http.Get(url)
 			if err != nil {
 				fmt.Printf(err.Error())
-				quit <- true
+				quit = true
 				break
 			}
+			//Increment total requests
 			total_requests++
 			fmt.Printf(resp.Status)
+			//Close the response
 			resp.Body.Close()
 		}
 		
-	}
+}
+
+func initJob(url string) {
+	//Reset quit flag
+	quit = false
+	//Get CPUs Available
+	CPUs := runtime.NumCPU()
+	//Set the number of goroutines to the number of CPUs
+		for i := 0; i < (CPUs - 1); i++ {
+			go job(url)
+		}
+		//Set job is running
+		job_running = true
+		//Set job start time
+		job_start_time = time.Now().Unix()
 }
 
 func main() {
@@ -61,13 +78,16 @@ func main() {
 	router := gin.Default()
 	
 	router.POST("/new-job", func(c *gin.Context) {
-		//Get Processors
-		CPUs := runtime.NumCPU()
-		for i := 0; i < (CPUs - 1); i++ {
-			go job(c.PostForm("url"))
+		//Check if job is running
+		if job_running {
+			c.JSON(http.StatusOK, gin.H{
+				"message": "Job is already running",
+			})
+			return
 		}
-		job_running = true
-		job_start_time = time.Now().Unix()
+		//Start the job	
+		initJob(c.PostForm("url"))
+		//Return the job success
 		c.JSON(http.StatusOK, gin.H{
 			"message": "new job started",
 		})
@@ -76,10 +96,12 @@ func main() {
 	router.POST("/register-worker", func(c *gin.Context) {
 		//Get the config
 		config := Config{}
+		//Get the config file
 		file, _ := ioutil.ReadFile("config.json")
+		//Unmarshal the config file
 		json.Unmarshal(file, &config)
 
-		//Check the password
+		//Check the key
 		if c.PostForm("key") != config.RANDOM_KEY {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"message": "wrong key",
@@ -110,6 +132,7 @@ func main() {
 	})
 
 	router.GET("/health-check", func(c *gin.Context) {
+		//Ping pong
 		c.JSON(200, gin.H{
 			"message": "pong",
 		})
@@ -118,29 +141,39 @@ func main() {
 	router.GET("/job-status", func (c *gin.Context) {
 		//Check if a job is running
 		if(job_running) {
+			//If a job is running return the job status
 			c.JSON(http.StatusOK, gin.H{
 				"message": "job is running",
 				"total_requests": total_requests,
 				"requests_per_second": total_requests / (time.Now().Unix() - job_start_time),
 			})
-		} else {
+			return
+		}
+			//If no job is running return the job status
 			c.JSON(http.StatusOK, gin.H{
 				"message": "job is not running",
 			})
-		}
 	})
 
 	router.GET("/stop-job", func (c *gin.Context) {
-		quit <- true
-		job_running = false
-		total_requests = 0
+		//Check if a job is running
+		if condition := job_running; condition {
+			quit = true
+			job_running = false
+			c.JSON(http.StatusOK, gin.H{
+				"message": "job stopped",
+			})
+			return
+		}
+		//If no job is running return the job status
 		c.JSON(http.StatusOK, gin.H{
-			"message": "job stopped",
+			"message": "job is not running",
 		})
 	})
 
 	//Generate Config File on first run
 	router.POST("/quick-start", func(c *gin.Context) {
+		//Check if config file exists
 		if _, err := os.Stat("config.json"); err == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"message": "Config file already exists. Please delete it and try again.",
